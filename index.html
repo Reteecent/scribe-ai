@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ScribeAI</title>
+  
+  <!-- Styles -->
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css">
+  
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-wrapper">
+    <!-- Header -->
+    <header class="header">
+      <button class="menu-btn" aria-label="Toggle menu">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <path d="M3 6H21M3 12H21M3 18H21" stroke="#6a0dad" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+      
+      <h1>ScribeAI</h1>
+      
+      <button class="new-chat-btn" aria-label="New chat">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <path d="M4 12H20M12 4V20" stroke="#6a0dad" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </header>
+
+    <div class="container">
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h3>Recent Chats</h3>
+          <button class="clear-history-btn">Clear</button>
+        </div>
+        <ul class="history-list"></ul>
+      </aside>
+
+      <!-- Main Content -->
+      <main class="main-content">
+        <div class="welcome-screen">
+          <div class="logo">
+            <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M60 15C35.1472 15 15 35.1472 15 60C15 84.8528 35.1472 105 60 105C84.8528 105 105 84.8528 105 60C105 35.1472 84.8528 15 60 15Z" stroke="#6A0DAD" stroke-width="10"/>
+              <path d="M45 45L75 45M45 60H75M45 75H60" stroke="#6A0DAD" stroke-width="8" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h2 class="welcome-title">Hi, I'm ScribeAI.</h2>
+          <p class="welcome-subtitle">How can I help you today?</p>
+        </div>
+
+        <div class="chat-container"></div>
+      </main>
+    </div>
+
+    <!-- Input Area -->
+    <div class="input-area">
+      <form class="input-form">
+        <div class="input-container">
+          <textarea class="prompt-input" placeholder="Type your prompt here..." rows="1"></textarea>
+          
+          <button type="submit" class="generate-btn" disabled>
+            <!-- Send Icon -->
+            <svg class="send-icon" width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+  
+            <!-- Stop Icon -->
+            <svg class="stop-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" style="display: none;">
+              <rect x="5" y="5" width="14" height="14" rx="2" stroke="white" stroke-width="2"/>
+            </svg>
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Scroll to Bottom Button -->
+    <button class="scroll-to-bottom-btn">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+        <path d="M12 5V19M12 19L19 12M12 19L5 12" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Context Menus -->
+  <div class="context-menu history-context-menu">
+    <button class="context-menu-item rename-btn">Rename</button>
+    <button class="context-menu-item delete-btn">Delete</button>
+  </div>
+
+  <!-- Rename Modal -->
+  <div class="modal" id="rename-modal">
+    <div class="modal-content">
+      <h3>Rename Chat</h3>
+      <input type="text" id="rename-input" placeholder="Enter new chat name">
+      <div class="modal-buttons">
+        <button id="save-rename">Save</button>
+        <button id="cancel-rename">Cancel</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Delete Modal -->
+  <div class="modal" id="delete-modal">
+    <div class="modal-content">
+      <h3>Delete Chat?</h3>
+      <p>This action is permanent and cannot be undone.</p>
+      <div class="modal-buttons">
+        <button id="delete-chat">Delete</button>
+        <button id="cancel-delete-chat">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@2.4.3/dist/purify.min.js"></script>
+  
+  <!-- JS Modules -->
+  <script type="module" src="js/storage.js"></script>
+  <script type="module" src="js/api.js"></script>
+  <script type="module" src="js/chat.js"></script>
+  <script type="module" src="js/pdf.js"></script>
+  <script type="module" src="js/ui.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
