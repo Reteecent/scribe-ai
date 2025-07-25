@@ -3,7 +3,7 @@
 A modern, responsive AI-powered chat application built with vanilla JavaScript that provides intelligent conversations with document export capabilities.
 
 ## 🚀 Live Demo  
-ScribeAI is live at: [https://the-scribe-ai.netlify.app/](https://the-scribe-ai.netlify.app/)
+ScribeAI is live at: [https://www.the-scribe-ai.netlify.app/](https://www.the-scribe-ai.netlify.app/)
 
 ## ✨ Features
 
