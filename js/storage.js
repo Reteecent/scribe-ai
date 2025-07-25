@@ -54,6 +54,18 @@ export function loadChats() {
     }
 }
 
+// Get messages for a specific chat
+export function getChatMessages(chatId) {
+    try {
+        const chats = JSON.parse(localStorage.getItem('scribeai-chats') || '[]');
+        const chat = chats.find(c => c.id === chatId);
+        return chat ? chat.messages : [];
+    } catch (error) {
+        console.error('Error getting chat messages:', error);
+        return [];
+    }
+}
+
 export function deleteChat(chatId) {
     try {
         let chats = JSON.parse(localStorage.getItem('scribeai-chats') || '[]');

@@ -3,45 +3,70 @@ function pad(n) {
 }
 
 function getSystemPrompt(genDate) {
-    return `
-Respond EXACTLY in this format for all outputs. Never deviate:
+    return `Respond strictly using the output format rules described below.
 
-1. SECTION STRUCTURE (THERE SHOULD BE AS MANY SECTION STRUCTURES AS POSSIBLE, DEPENDING ON THE LENGTH OF THE RESPONSE):
-## [Title]
-**Goal:** [1-sentence purpose]
+Never include or reference any of the instructions, categories, examples, or formatting rules in the output. Do not output headers like "SECTION STRUCTURE," "CONTENT TYPES," etc.
 
-2. CONTENT TYPES
-• Processes → Numbered lists:
-  1. [Step]
-    - [Sub-step]
-    - [Sub-step]
-  2. [Next step]...
+Do not explain, introduce, or justify anything before or after the response.
 
-• Options → Bullet points:
-  - [Item 1]
-  - [Item 2]...
+Start responses immediately with the formatted content, using the structures described below:
 
-• Comparisons → Tables:
-| Parameter | Description | Reference |
-|-----------|-------------|-----------|
-
-3. FORMATTING
-• Code: \`\`\`[language]
-[content]
-\`\`\`
-• Files: \`path/to/file.ext\`
-• Key terms: **bold** for equipment, *italics* for standards
-
-4. DOCUMENT CONTROL (AT THE END OF THE RESPONSE)
----
-**Generated:** ${genDate} | **Version:** 1.0
 ---
 
-Maintain strict left-alignment and never merge content types.
+1. Title Sections  
+Format:  
+## [Title]  
+Below the title, include a one-line goal starting with:  
+**Goal:** [Description]
+
+---
+
+2. For Processes, use numbered lists:  
+1. [Step]  
+   - [Sub-step]  
+   - [Sub-step]  
+2. [Next Step]
+
+---
+
+3. For Options, use plain bullet points:  
+- [Option A]  
+- [Option B]
+
+---
+
+4. For Comparisons, use tables with these columns:  
+| Parameter | Description | Reference |  
+|-----------|-------------|-----------|  
+| [Value]   | [Text]      | [Ref]     |
+
+---
+
+5. For Formatting, follow this:  
+
+Code blocks:  
+~~~[language]  
+[code here]  
+~~~  
+
+File paths: 'path/to/file.ext'  
+Key terms: Use **bold** for equipment and footer, *italics* for standards
+
+---
+
+6. Document Footer (Required at End):  
+Output this exactly at the end:  
+
+---  
+<footer>  
+    <div class="document-footer">  
+        <strong>Generated:</strong> ${genDate} | <strong>Version:</strong> 1.0  
+    </div>  
+</footer>  
 `;
 }
 
-export function getAIResponse(prompt, onChunk) {
+export function getAIResponse(conversation, onChunk) {
     return new Promise((resolve, reject) => {
         const controller = new AbortController();
         const signal = controller.signal;
@@ -50,13 +75,10 @@ export function getAIResponse(prompt, onChunk) {
         const genDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
         const systemPromptWithDate = getSystemPrompt(genDate);
         
-        // Prepare messages with system prompt
         const messages = [
             { role: "system", content: systemPromptWithDate },
-            { role: "user", content: prompt }
+            ...conversation
         ];
-        
-        console.log('Starting AI request for prompt:', prompt.substring(0, 50) + '...');
         
         fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
@@ -81,15 +103,16 @@ export function getAIResponse(prompt, onChunk) {
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
-                let finalText = '';
+                let fullResponse = '';
+                let lastRenderTime = 0;
+                const renderInterval = 300;
                 
                 function read() {
                     reader.read().then(({ done, value }) => {
                         if (done) {
-                            console.log('AI response complete, total length:', finalText.length);
                             resolve({
-                                text: finalText,
-                                formattedForPDF: finalText
+                                text: fullResponse,
+                                formattedForPDF: fullResponse
                             });
                             return;
                         }
@@ -104,10 +127,9 @@ export function getAIResponse(prompt, onChunk) {
                             
                             const jsonStr = trimmed.slice(5).trim();
                             if (jsonStr === '[DONE]') {
-                                console.log('Stream finished');
                                 resolve({
-                                    text: finalText,
-                                    formattedForPDF: finalText
+                                    text: fullResponse,
+                                    formattedForPDF: fullResponse
                                 });
                                 return;
                             }
@@ -116,11 +138,16 @@ export function getAIResponse(prompt, onChunk) {
                                 const data = JSON.parse(jsonStr);
                                 const content = data.choices?.[0]?.delta?.content;
                                 if (content) {
-                                    finalText += content;
-                                    if (onChunk) onChunk(content);
+                                    fullResponse += content;
+                                    
+                                    const now = Date.now();
+                                    if (now - lastRenderTime > renderInterval) {
+                                        if (onChunk) onChunk(fullResponse);
+                                        lastRenderTime = now;
+                                    }
                                 }
                             } catch (err) {
-                                console.error('Error parsing chunk:', err, 'JSON:', jsonStr);
+                                console.error('Error parsing chunk:', err);
                             }
                         }
                         read();
@@ -129,7 +156,6 @@ export function getAIResponse(prompt, onChunk) {
                 read();
             })
             .catch(error => {
-                console.error('API request failed:', error);
                 if (error.name === 'AbortError') {
                     reject(new Error('Generation cancelled'));
                 } else {
@@ -137,7 +163,6 @@ export function getAIResponse(prompt, onChunk) {
                 }
             });
         
-        // Return controller to allow cancellation
         return controller;
     });
 }

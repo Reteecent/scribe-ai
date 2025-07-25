@@ -1,228 +1,163 @@
-export async function generatePDF(aiMessageContainer) {
-    // Validate input first
-    if (!aiMessageContainer || typeof aiMessageContainer.querySelector !== 'function') {
-        throw new Error('Invalid message container provided');
+import { showToast } from './chat.js';
+
+export async function generatePDF(element) {
+    if (!element) {
+        showToast('No content to generate PDF', 'error');
+        throw new Error('No element provided for PDF generation');
     }
     
     try {
-        console.log('Starting PDF generation...');
-        
-        // Ensure jsPDF and html2canvas are loaded
-        await ensurePDFLibraries();
-        
-        // Get content element
-        const contentElement = aiMessageContainer.querySelector('.ai-message-content, .markdown-body');
-        if (!contentElement) {
-            throw new Error('No content found for PDF generation');
-        }
-        
-        // Create temporary container for PDF rendering
-        const tempContainer = createTempContainer();
+        // Create a temporary container for PDF generation
+        const tempContainer = document.createElement('div');
+        tempContainer.style.position = 'absolute';
+        tempContainer.style.left = '-9999px';
+        tempContainer.style.top = '0';
+        tempContainer.style.width = '800px';
+        tempContainer.style.padding = '30px';
+        tempContainer.style.backgroundColor = 'white';
+        tempContainer.style.color = '#000000';
+        tempContainer.style.fontFamily = 'Roboto, Arial, sans-serif';
+        tempContainer.style.fontSize = '16px';
+        tempContainer.style.lineHeight = '1.6';
         
         // Clone and prepare content
-        const clonedContent = contentElement.cloneNode(true);
-        prepareContentForPDF(clonedContent);
+        const clone = element.cloneNode(true);
         
-        // Create wrapper for proper scaling
-        const pdfWrapper = document.createElement('div');
-        pdfWrapper.className = 'pdf-wrapper';
-        pdfWrapper.appendChild(clonedContent);
-        tempContainer.appendChild(pdfWrapper);
-        document.body.appendChild(tempContainer);
+        // Remove interactive elements
+        const elementsToRemove = clone.querySelectorAll(
+            'button, .generate-btn, .download-pdf-btn, .scroll-to-bottom-btn, .loading-indicator'
+        );
+        elementsToRemove.forEach(el => el.remove());
         
-        // Generate PDF
-        const { jsPDF } = window.jspdf;
-        const doc = new jsPDF({
-            orientation: 'portrait',
-            unit: 'px',
-            compress: true
-        });
-        
-        // Wait for rendering
-        await new Promise(resolve => setTimeout(resolve, 300));
-        
-        // Render content to canvas
-        const canvas = await window.html2canvas(pdfWrapper, {
-            scale: 3,
-            logging: false,
-            useCORS: true,
-            backgroundColor: '#FFFFFF',
-            width: pdfWrapper.scrollWidth,
-            height: pdfWrapper.scrollHeight
-        });
-        
-        // Add canvas to PDF
-        const imgData = canvas.toDataURL('image/png', 1.0);
-        const imgWidth = doc.internal.pageSize.getWidth() - 40;
-        const imgHeight = (canvas.height * imgWidth) / canvas.width;
-        
-        let position = 0;
-        const pageHeight = doc.internal.pageSize.getHeight() - 40;
-        
-        while (position < imgHeight) {
-            if (position > 0) {
-                doc.addPage();
+        // Ensure proper styling for all elements
+        clone.querySelectorAll('*').forEach(el => {
+            el.style.color = '#000000';
+            el.style.backgroundColor = 'white';
+            
+            if (el.tagName === 'PRE' || el.tagName === 'CODE') {
+                el.style.backgroundColor = '#f6f8fa';
+                el.style.border = '1px solid #e1e4e8';
+                el.style.borderRadius = '6px';
+                el.style.padding = '16px';
+                el.style.overflow = 'auto';
             }
             
-            const heightToRender = Math.min(pageHeight, imgHeight - position);
-            doc.addImage(
-                imgData,
-                'PNG',
-                20,
-                20 - position,
-                imgWidth,
-                imgHeight,
-                0,
-                position,
-                imgWidth,
-                heightToRender,
-                null,
-                'FAST'
-            );
+            if (el.tagName === 'TABLE') {
+                el.style.borderCollapse = 'collapse';
+                el.style.width = '100%';
+                el.style.margin = '16px 0';
+                el.style.border = '1px solid #000000';
+            }
             
-            position += pageHeight;
+            if (el.tagName === 'TH' || el.tagName === 'TD') {
+                el.style.border = '1px solid #000000';
+                el.style.padding = '8px 12px';
+            }
+        });
+        
+        // Format footer properly
+        const footer = clone.querySelector('.document-footer');
+        if (footer) {
+            footer.innerHTML = footer.innerHTML
+                .replace('**Generated:**', '<strong>Generated:</strong>')
+                .replace('**Version:**', '<strong>Version:</strong>');
+            footer.style.fontWeight = 'bold';
+            footer.style.color = '#666666';
+            footer.style.marginTop = '20px';
+            footer.style.paddingTop = '10px';
+            footer.style.borderTop = '1px solid #e1e1e1';
         }
         
-        // Clean up
-        document.body.removeChild(tempContainer);
+        tempContainer.appendChild(clone);
+        document.body.appendChild(tempContainer);
         
-        console.log('PDF generation completed successfully');
-        return doc.output('blob');
+        // Configure html2pdf options
+        const options = {
+            margin: 10,
+            filename: `ScribeAI-Document-${new Date().toISOString().slice(0, 10)}.pdf`,
+            image: {
+                type: 'jpeg',
+                quality: 0.98
+            },
+            html2canvas: {
+                scale: 2,
+                logging: true,
+                useCORS: true,
+                backgroundColor: '#FFFFFF',
+                ignoreElements: (element) => {
+                    return element.classList &&
+                        (element.classList.contains('generate-btn') ||
+                            element.classList.contains('download-pdf-btn') ||
+                            element.classList.contains('scroll-to-bottom-btn'));
+                }
+            },
+            jsPDF: {
+                unit: 'mm',
+                format: 'a4',
+                orientation: 'portrait'
+            }
+        };
         
+        // Generate and save PDF
+        await html2pdf().set(options).from(tempContainer).save();
+        
+        showToast('PDF generated successfully', 'success');
+        return true;
     } catch (error) {
-        console.error('PDF Generation Error:', error);
-        
-        // Clean up on error
-        const tempContainer = document.querySelector('.pdf-temp-container');
-        if (tempContainer) document.body.removeChild(tempContainer);
-        
-        throw new Error(`PDF generation failed: ${error.message}`);
-    }
-}
-
-async function ensurePDFLibraries() {
-    const promises = [];
-    
-    if (!window.jspdf) {
-        promises.push(loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'));
-    }
-    if (!window.html2canvas) {
-        promises.push(loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'));
-    }
-    
-    if (promises.length > 0) {
-        console.log('Loading PDF libraries...');
-        await Promise.all(promises);
-        console.log('PDF libraries loaded successfully');
-    }
-}
-
-function loadScript(src) {
-    return new Promise((resolve, reject) => {
-        // Check if script already exists
-        if (document.querySelector(`script[src="${src}"]`)) {
-            resolve();
-            return;
+        console.error('PDF generation error:', error);
+        showToast('Failed to generate PDF', 'error');
+        throw error;
+    } finally {
+        // Clean up temporary container
+        const tempContainer = document.querySelector('div[style*="left: -9999px"]');
+        if (tempContainer && tempContainer.parentNode) {
+            tempContainer.parentNode.removeChild(tempContainer);
         }
-        
-        const script = document.createElement('script');
-        script.src = src;
-        script.onload = resolve;
-        script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-        document.head.appendChild(script);
-    });
-}
-
-function createTempContainer() {
-    const container = document.createElement('div');
-    container.className = 'pdf-temp-container';
-    Object.assign(container.style, {
-        position: 'absolute',
-        left: '-9999px',
-        top: '0',
-        width: '800px',
-        padding: '40px',
-        backgroundColor: 'white',
-        fontFamily: 'Roboto, Arial, sans-serif',
-        fontSize: '16px',
-        lineHeight: '1.8',
-        color: '#000000'
-    });
-    return container;
+    }
 }
 
 function prepareContentForPDF(content) {
-    // Remove any existing buttons
-    content.querySelectorAll('button').forEach(btn => btn.remove());
-    
-    // Ensure visibility
-    content.style.opacity = '1';
-    content.style.visibility = 'visible';
-    content.style.display = 'block';
-    
-    // Improved PDF styling
-    content.style.fontSize = '16px';
-    content.style.lineHeight = '1.8';
-    content.style.padding = '30px';
-    content.style.maxWidth = '800px';
-    content.style.margin = '0 auto';
-    
-    // Fix styles for PDF
-    content.querySelectorAll('*').forEach(element => {
-        // Remove any transform effects
-        element.style.transform = 'none';
+    // Apply consistent styling
+    content.querySelectorAll('*').forEach(el => {
+        el.style.color = '#000000';
+        el.style.backgroundColor = '#ffffff';
         
-        // Ensure text is black for PDF
-        element.style.color = '#000000';
-        element.style.backgroundColor = '#ffffff';
-        
-        // Fix pre elements
-        if (element.tagName === 'PRE') {
-            element.style.backgroundColor = '#f6f8fa';
-            element.style.border = '1px solid #d0d7de';
-            element.style.padding = '20px';
-            element.style.borderRadius = '8px';
-            element.style.overflow = 'visible';
-            element.style.fontSize = '14px';
-            element.style.lineHeight = '1.5';
+        if (el.tagName === 'PRE') {
+            el.style.backgroundColor = '#f6f8fa';
+            el.style.border = '1px solid #d0d7de';
+            el.style.padding = '20px';
+            el.style.borderRadius = '8px';
+            el.style.overflow = 'visible';
+            el.style.fontSize = '14px';
+            el.style.lineHeight = '1.5';
         }
         
-        // Fix headers
-        if (['H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(element.tagName)) {
-            element.style.color = '#000000';
-            element.style.marginBottom = '8px';
-            element.style.marginTop = '25px';
-            element.style.fontWeight = 'bold';
+        if (/^H[1-6]$/.test(el.tagName)) {
+            el.style.color = '#000000';
+            el.style.marginBottom = '8px';
+            el.style.marginTop = '25px';
+            el.style.fontWeight = 'bold';
         }
         
-        // Fix tables
-        if (element.tagName === 'TABLE') {
-            element.style.borderCollapse = 'collapse';
-            element.style.width = '100%';
-            element.style.backgroundColor = '#ffffff';
-            element.style.border = '1px solid #000000';
-            element.style.marginTop = '20px';
-            element.style.marginBottom = '20px';
-            element.style.fontSize = '14px';
+        if (el.tagName === 'TABLE') {
+            el.style.borderCollapse = 'collapse';
+            el.style.width = '100%';
+            el.style.backgroundColor = '#ffffff';
+            el.style.border = '1px solid #000000';
+            el.style.marginTop = '20px';
+            el.style.marginBottom = '20px';
+            el.style.fontSize = '14px';
         }
         
-        if (element.tagName === 'TH' || element.tagName === 'TD') {
-            element.style.border = '1px solid #000000';
-            element.style.padding = '8px 12px';
-            element.style.color = '#000000';
-            element.style.backgroundColor = '#ffffff';
+        if (el.tagName === 'TH' || el.tagName === 'TD') {
+            el.style.border = '1px solid #000000';
+            el.style.padding = '8px 12px';
+            el.style.color = '#000000';
+            el.style.backgroundColor = '#ffffff';
         }
         
-        if (element.tagName === 'TH') {
-            element.style.fontWeight = 'bold';
-            element.style.backgroundColor = '#ffffff';
-            element.style.color = '#000000';
-        }
-        
-        // Better spacing for all elements
-        if (['P', 'UL', 'OL', 'PRE', 'TABLE', 'BLOCKQUOTE'].includes(element.tagName)) {
-            element.style.marginTop = '15px';
-            element.style.marginBottom = '15px';
+        if (el.tagName === 'TH') {
+            el.style.fontWeight = 'bold';
         }
     });
 }

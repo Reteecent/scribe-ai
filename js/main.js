@@ -21,8 +21,7 @@ async function ensureLibrariesLoaded() {
             checkLib('marked', 'marked'),
             checkLib('DOMPurify', 'DOMPurify'),
             checkLib('highlight.js', 'hljs'),
-            checkLib('jsPDF', 'jspdf'),
-            checkLib('html2canvas', 'html2canvas')
+            checkLib('html2pdf', 'html2pdf'),
         ].every(Boolean);
         
         if (allLoaded) {
@@ -53,65 +52,39 @@ async function ensureLibrariesLoaded() {
 async function initialize() {
     try {
         console.log('ScribeAI initializing...');
-        
-        // Wait for libraries
         await ensureLibrariesLoaded();
-        
-        // Initialize UI
         initUI();
         
-        // Setup form submission
         const form = document.querySelector('.input-form');
-        if (form) {
-            form.addEventListener('submit', handleSubmit);
-        } else {
-            console.error('Form not found');
-        }
+        if (form) form.addEventListener('submit', handleSubmit);
         
-        // Setup new chat button
         const newChatBtn = document.querySelector('.new-chat-btn');
-        if (newChatBtn) {
-            newChatBtn.addEventListener('click', startNewChat);
-        } else {
-            console.error('New chat button not found');
-        }
+        if (newChatBtn) newChatBtn.addEventListener('click', startNewChat);
         
-        // Setup clear history button
         const clearHistoryBtn = document.querySelector('.clear-history-btn');
         if (clearHistoryBtn) {
             clearHistoryBtn.addEventListener('click', () => {
-                console.log('Clearing chat history');
                 clearHistory();
                 loadChatHistory([]);
             });
-        } else {
-            console.error('Clear history button not found');
         }
         
-        // Enable/disable generate button based on input
         const promptInput = document.querySelector('.prompt-input');
         const generateBtn = document.querySelector('.generate-btn');
-        
         if (promptInput && generateBtn) {
             promptInput.addEventListener('input', () => {
                 generateBtn.disabled = promptInput.value.trim() === '';
             });
         }
         
-        // Load chat history
         try {
             const chats = loadChats();
             loadChatHistory(chats);
-            console.log(`Loaded ${chats.length} chats from storage`);
         } catch (error) {
-            console.error('Error loading chat history:', error);
             loadChatHistory([]);
         }
         
-        console.log('ScribeAI initialized successfully');
-        
     } catch (error) {
-        console.error('Initialization error:', error);
         showErrorToUser('Failed to initialize application. Please refresh the page.');
     }
 }
