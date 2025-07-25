@@ -1,8 +1,24 @@
+
+const CHAT_STORAGE_KEY = 'scribeai-chats';
+
+function extractKeywords(text) {
+    if (!text) return [];
+    
+    // Remove common words and extract meaningful keywords
+    const commonWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them']);
+    
+    return text
+        .toLowerCase()
+        .replace(/[^\w\s]/g, ' ')
+        .split(/\s+/)
+        .filter(word => word.length > 3 && !commonWords.has(word))
+        .slice(0, 20); // Limit to 20 keywords
+}
+
 export function saveChat(prompt, response, chatId) {
     try {
-        let chats = JSON.parse(localStorage.getItem('scribeai-chats') || '[]');
+        let chats = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY)) || [];
         
-        // Find existing chat or create new one
         let chat = chats.find(c => c.id === chatId);
         if (!chat) {
             chat = {
@@ -14,39 +30,36 @@ export function saveChat(prompt, response, chatId) {
             chats.unshift(chat);
         }
         
-        // Add messages to current chat
-        chat.messages.push({
-            prompt,
-            response,
-            ts: new Date().toISOString()
-        });
+        const messageData = { 
+            prompt, 
+            response, 
+            ts: new Date().toISOString(),
+            keywords: extractKeywords(prompt + ' ' + response)
+        };
         
-        // Update timestamp
+        chat.messages.push(messageData);
         chat.ts = new Date().toISOString();
+        chat.keywords = extractKeywords(chat.messages.map(m => m.prompt + ' ' + m.response).join(' '));
         
-        // Update title if it's the first message
         if (chat.messages.length === 1) {
             chat.title = prompt.substring(0, 50) + (prompt.length > 50 ? '...' : '');
         }
         
-        // Keep only the last 50 chats
         if (chats.length > 50) {
             chats = chats.slice(0, 50);
         }
         
-        localStorage.setItem('scribeai-chats', JSON.stringify(chats));
-        
-        console.log('Chat saved successfully:', chat.id);
+        localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chats));
+        return chat;
     } catch (error) {
         console.error('Error saving chat:', error);
+        throw error;
     }
 }
 
 export function loadChats() {
     try {
-        const chats = JSON.parse(localStorage.getItem('scribeai-chats') || '[]');
-        
-        // Sort chats by timestamp (newest first)
+        const chats = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY)) || [];
         return chats.sort((a, b) => new Date(b.ts) - new Date(a.ts));
     } catch (error) {
         console.error('Error loading chats:', error);
@@ -54,12 +67,11 @@ export function loadChats() {
     }
 }
 
-// Get messages for a specific chat
 export function getChatMessages(chatId) {
     try {
-        const chats = JSON.parse(localStorage.getItem('scribeai-chats') || '[]');
+        const chats = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY)) || [];
         const chat = chats.find(c => c.id === chatId);
-        return chat ? chat.messages : [];
+        return chat?.messages || [];
     } catch (error) {
         console.error('Error getting chat messages:', error);
         return [];
@@ -68,67 +80,58 @@ export function getChatMessages(chatId) {
 
 export function deleteChat(chatId) {
     try {
-        let chats = JSON.parse(localStorage.getItem('scribeai-chats') || '[]');
-        const deletedChat = chats.find(chat => chat.id === chatId);
+        let chats = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY)) || [];
         chats = chats.filter(chat => chat.id !== chatId);
-        localStorage.setItem('scribeai-chats', JSON.stringify(chats));
+        localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chats));
         
-        console.log('Chat deleted:', chatId);
-        
-        // Check if deleted chat was currently open and clear if so
-        const currentChatElement = document.querySelector('.history-list li.active');
-        if (currentChatElement && currentChatElement.dataset.chatId === chatId) {
-            clearChatAndShowWelcome();
+        if (document.querySelector(`.history-list li.active[data-chat-id="${chatId}"]`)) {
+            clearChatUI();
         }
         
-        return deletedChat;
+        return true;
     } catch (error) {
         console.error('Error deleting chat:', error);
+        return false;
     }
-}
-
-function clearChatAndShowWelcome() {
-    const chatContainer = document.querySelector('.chat-container');
-    const welcomeScreen = document.querySelector('.welcome-screen');
-    const scrollButton = document.querySelector('.scroll-to-bottom-btn');
-    
-    if (chatContainer) {
-        chatContainer.style.display = 'none';
-        chatContainer.innerHTML = '';
-    }
-    
-    if (welcomeScreen) {
-        welcomeScreen.style.display = 'flex';
-    }
-    
-    if (scrollButton) {
-        scrollButton.classList.remove('visible');
-    }
-    
-    // Remove active state from all history items
-    document.querySelectorAll('.history-list li').forEach(li => li.classList.remove('active'));
 }
 
 export function updateChatTitle(chatId, newTitle) {
     try {
-        let chats = JSON.parse(localStorage.getItem('scribeai-chats') || '[]');
+        let chats = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY)) || [];
         const chat = chats.find(c => c.id === chatId);
         if (chat) {
             chat.title = newTitle;
-            localStorage.setItem('scribeai-chats', JSON.stringify(chats));
-            console.log('Chat title updated:', chatId, newTitle);
+            localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chats));
+            return true;
         }
+        return false;
     } catch (error) {
         console.error('Error updating chat title:', error);
+        return false;
     }
 }
 
 export function clearHistory() {
     try {
-        localStorage.removeItem('scribeai-chats');
-        clearChatAndShowWelcome();
-        console.log('Chat history cleared');
+        localStorage.removeItem(CHAT_STORAGE_KEY);
+        clearChatUI();
+        return true;
     } catch (error) {
         console.error('Error clearing history:', error);
+        return false;
     }
+}
+
+function clearChatUI() {
+    const chatContainer = document.querySelector('.chat-container');
+    if (chatContainer) {
+        chatContainer.innerHTML = '';
+        chatContainer.style.display = 'none';
+    }
+
+    const welcomeScreen = document.querySelector('.welcome-screen');
+    if (welcomeScreen) welcomeScreen.style.display = 'flex';
+
+    document.querySelectorAll('.history-list li').forEach(li => li.classList.remove('active'));
+    document.querySelector('.scroll-to-bottom-btn')?.classList.remove('visible');
 }

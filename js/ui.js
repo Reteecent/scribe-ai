@@ -1,10 +1,10 @@
-import { generatePDF } from './pdf.js';
-import { deleteChat, loadChats } from './storage.js';
 
-let longPressTimer;
+import { generatePDF } from './pdf.js';
+import { showToast } from './toast.js';
+
 let contextMenuChatIndex = null;
 let currentContextMenu = null;
-let editingMessage = null;
+let isPDFGenerating = false;
 
 export function initUI() {
     setupInputTextarea();
@@ -14,6 +14,8 @@ export function initUI() {
     initRenameModal();
     initDeleteModal();
     initScrollButton();
+    setupNewChatButton();
+    setupClearHistoryButton();
 }
 
 function setupInputTextarea() {
@@ -31,8 +33,7 @@ function setupInputTextarea() {
     promptTextarea.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            const form = document.querySelector('.input-form');
-            if (form) form.dispatchEvent(new Event('submit'));
+            document.querySelector('.input-form')?.dispatchEvent(new Event('submit'));
         }
     });
 }
@@ -50,25 +51,19 @@ function setupMenuToggle() {
 }
 
 function setupClickOutsideHandlers() {
-    const sidebar = document.querySelector('.sidebar');
-    const menuBtn = document.querySelector('.menu-btn');
-
     document.addEventListener('click', (e) => {
-        if (sidebar && sidebar.classList.contains('open') &&
+        const sidebar = document.querySelector('.sidebar');
+        const menuBtn = document.querySelector('.menu-btn');
+        
+        if (sidebar?.classList.contains('open') &&
             !sidebar.contains(e.target) &&
-            !menuBtn.contains(e.target)) {
+            !menuBtn?.contains(e.target)) {
             sidebar.classList.remove('open');
         }
 
-        const contextMenus = document.querySelectorAll('.context-menu');
-        let clickedOnContextMenu = false;
-        
-        contextMenus.forEach(menu => {
-            if (menu.contains(e.target)) clickedOnContextMenu = true;
-        });
-        
-        if (!clickedOnContextMenu) hideContextMenus();
-        if (editingMessage && !editingMessage.contains(e.target)) cancelEditMode();
+        if (!e.target.closest('.context-menu')) {
+            hideContextMenus();
+        }
     });
 }
 
@@ -78,46 +73,37 @@ function initContextMenus() {
 
     if (!historyList || !historyContextMenu) return;
 
-    historyList.addEventListener('mousedown', (e) => {
-        const listItem = e.target.closest('li');
-        if (!listItem || !listItem.dataset.index || listItem.classList.contains('empty')) return;
-        
-        longPressTimer = setTimeout(() => {
-            showContextMenu(e, listItem.dataset.index, historyContextMenu);
-        }, 500);
-    });
-
-    historyList.addEventListener('mouseup', () => clearTimeout(longPressTimer));
-    historyList.addEventListener('mouseleave', () => clearTimeout(longPressTimer));
-
+    // Desktop right-click
     historyList.addEventListener('contextmenu', (e) => {
+        const listItem = e.target.closest('li:not(.empty)');
+        if (!listItem) return;
         e.preventDefault();
-        const listItem = e.target.closest('li');
-        if (!listItem || !listItem.dataset.index || listItem.classList.contains('empty')) return;
         showContextMenu(e, listItem.dataset.index, historyContextMenu);
     });
 
+    // Mobile long-press
     historyList.addEventListener('touchstart', (e) => {
-        const listItem = e.target.closest('li');
-        if (!listItem || !listItem.dataset.index || listItem.classList.contains('empty')) return;
+        const listItem = e.target.closest('li:not(.empty)');
+        if (!listItem) return;
         
-        longPressTimer = setTimeout(() => {
+        const timer = setTimeout(() => {
             const touch = e.touches[0];
-            const syntheticEvent = {
+            showContextMenu({
                 clientX: touch.clientX,
                 clientY: touch.clientY,
                 preventDefault: () => {}
-            };
-            showContextMenu(syntheticEvent, listItem.dataset.index, historyContextMenu);
+            }, listItem.dataset.index, historyContextMenu);
         }, 500);
+        
+        const cancelTimer = () => clearTimeout(timer);
+        e.target.addEventListener('touchend', cancelTimer, { once: true });
+        e.target.addEventListener('touchmove', cancelTimer, { once: true });
     });
 
-    historyList.addEventListener('touchend', () => clearTimeout(longPressTimer));
-    historyList.addEventListener('touchcancel', () => clearTimeout(longPressTimer));
-
-    document.addEventListener('click', function(e) {
-        if (e.target.matches('.history-context-menu .rename-btn')) handleRename();
-        else if (e.target.matches('.history-context-menu .delete-btn')) handleDelete();
+    // Context menu actions
+    document.addEventListener('click', (e) => {
+        if (e.target.matches('.rename-btn')) handleRename();
+        else if (e.target.matches('.delete-btn')) handleDelete();
     });
 }
 
@@ -125,14 +111,10 @@ function handleRename() {
     const modal = document.getElementById('rename-modal');
     if (!modal) return;
     
-    try {
-        const chats = loadChats();
-        if (contextMenuChatIndex !== null && chats[contextMenuChatIndex]) {
-            const input = document.getElementById('rename-input');
-            if (input) input.value = chats[contextMenuChatIndex].title || '';
-        }
-    } catch (error) {
-        console.error('Error loading chat for rename:', error);
+    const chats = JSON.parse(localStorage.getItem('scribeai-chats') || []);
+    if (contextMenuChatIndex !== null && chats[contextMenuChatIndex]) {
+        const input = document.getElementById('rename-input');
+        if (input) input.value = chats[contextMenuChatIndex].title || '';
     }
     
     modal.style.display = 'flex';
@@ -157,27 +139,29 @@ function initRenameModal() {
         const newName = input.value.trim();
         if (newName && contextMenuChatIndex !== null) {
             try {
-                const { updateChatTitle, loadChats } = await import('./storage.js');
-                const { loadChatHistory } = await import('./chat.js');
-                
-                const chats = loadChats();
+                const chats = JSON.parse(localStorage.getItem('scribeai-chats') || []);
                 const chat = chats[contextMenuChatIndex];
                 if (chat) {
-                    updateChatTitle(chat.id, newName);
-                    loadChatHistory(loadChats());
+                    chat.title = newName;
+                    localStorage.setItem('scribeai-chats', JSON.stringify(chats));
                     showToast('Chat renamed successfully', 'success');
+                    
+                    const listItems = document.querySelectorAll('.history-list li');
+                    if (listItems[contextMenuChatIndex]) {
+                        listItems[contextMenuChatIndex].textContent = newName;
+                    }
                 }
             } catch (error) {
                 console.error('Error renaming chat:', error);
                 showToast('Failed to rename chat', 'error');
             }
         }
-        closeModal(modal);
+        modal.style.display = 'none';
     });
 
-    cancelBtn.addEventListener('click', () => closeModal(modal));
+    cancelBtn.addEventListener('click', () => modal.style.display = 'none');
     modal.addEventListener('click', (e) => {
-        if (e.target === modal) closeModal(modal);
+        if (e.target === modal) modal.style.display = 'none';
     });
 }
 
@@ -188,23 +172,28 @@ function initDeleteModal() {
 
     if (!modal || !deleteBtn || !cancelBtn) return;
 
-    deleteBtn.addEventListener('click', async () => {
+    deleteBtn.addEventListener('click', () => {
         if (contextMenuChatIndex !== null) {
             try {
-                const { deleteChat, loadChats } = await import('./storage.js');
-                const { loadChatHistory, startNewChat } = await import('./chat.js');
-                
-                const chats = loadChats();
+                const chats = JSON.parse(localStorage.getItem('scribeai-chats') || []);
                 const chat = chats[contextMenuChatIndex];
                 
                 if (chat) {
-                    deleteChat(chat.id);
-                    loadChatHistory(loadChats());
+                    chats.splice(contextMenuChatIndex, 1);
+                    localStorage.setItem('scribeai-chats', JSON.stringify(chats));
                     showToast('Chat deleted successfully', 'success');
                     
-                    const currentChatElement = document.querySelector('.history-list li.active');
-                    if (currentChatElement && currentChatElement.dataset.chatId === chat.id) {
-                        startNewChat();
+                    const listItem = document.querySelector(`.history-list li[data-index="${contextMenuChatIndex}"]`);
+                    if (listItem) listItem.remove();
+                    
+                    if (document.querySelector('.history-list').children.length === 0) {
+                        document.querySelector('.history-list').innerHTML = '<li class="empty">No chat history</li>';
+                    }
+                    
+                    if (document.querySelector(`.history-list li.active[data-chat-id="${chat.id}"]`)) {
+                        document.querySelector('.chat-container').innerHTML = '';
+                        document.querySelector('.chat-container').style.display = 'none';
+                        document.querySelector('.welcome-screen').style.display = 'flex';
                     }
                 }
             } catch (error) {
@@ -212,12 +201,12 @@ function initDeleteModal() {
                 showToast('Failed to delete chat', 'error');
             }
         }
-        closeModal(modal);
+        modal.style.display = 'none';
     });
 
-    cancelBtn.addEventListener('click', () => closeModal(modal));
+    cancelBtn.addEventListener('click', () => modal.style.display = 'none');
     modal.addEventListener('click', (e) => {
-        if (e.target === modal) closeModal(modal);
+        if (e.target === modal) modal.style.display = 'none';
     });
 }
 
@@ -236,24 +225,34 @@ function initScrollButton() {
     });
 }
 
-function updateScrollButtonVisibility() {
-    const chatContainer = document.querySelector('.chat-container');
-    const scrollButton = document.querySelector('.scroll-to-bottom-btn');
+function setupNewChatButton() {
+    const newChatBtn = document.querySelector('.new-chat-btn');
+    if (!newChatBtn) return;
 
-    if (!chatContainer || !scrollButton) return;
+    newChatBtn.addEventListener('click', () => {
+        document.querySelector('.chat-container').innerHTML = '';
+        document.querySelector('.chat-container').style.display = 'none';
+        document.querySelector('.welcome-screen').style.display = 'flex';
+        document.querySelectorAll('.history-list li').forEach(li => li.classList.remove('active'));
+        document.querySelector('.scroll-to-bottom-btn').classList.remove('visible');
+    });
+}
 
-    if (!chatContainer.children.length) {
-        scrollButton.classList.remove('visible');
-        return;
-    }
+function setupClearHistoryButton() {
+    const clearHistoryBtn = document.querySelector('.clear-history-btn');
+    if (!clearHistoryBtn) return;
 
-    const isAtBottom = chatContainer.scrollHeight - chatContainer.scrollTop <= chatContainer.clientHeight + 100;
-    scrollButton.classList.toggle('visible', !isAtBottom);
+    clearHistoryBtn.addEventListener('click', () => {
+        localStorage.removeItem('scribeai-chats');
+        document.querySelector('.history-list').innerHTML = '<li class="empty">No chat history</li>';
+        document.querySelector('.chat-container').innerHTML = '';
+        document.querySelector('.chat-container').style.display = 'none';
+        document.querySelector('.welcome-screen').style.display = 'flex';
+        showToast('Chat history cleared', 'success');
+    });
 }
 
 function showContextMenu(e, index, menu) {
-    if (!menu || !document.body.contains(menu)) return;
-    
     e.preventDefault();
     hideContextMenus();
     
@@ -263,118 +262,115 @@ function showContextMenu(e, index, menu) {
     contextMenuChatIndex = index;
     currentContextMenu = menu;
 
+    // Adjust position if near window edge
     setTimeout(() => {
-        if (!document.body.contains(menu)) return;
-        
         const rect = menu.getBoundingClientRect();
-        if (rect.right > window.innerWidth) menu.style.left = (e.clientX - rect.width) + 'px';
-        if (rect.bottom > window.innerHeight) menu.style.top = (e.clientY - rect.height) + 'px';
+        if (rect.right > window.innerWidth) menu.style.left = `${window.innerWidth - rect.width - 10}px`;
+        if (rect.bottom > window.innerHeight) menu.style.top = `${window.innerHeight - rect.height - 10}px`;
+        
         menu.classList.add('show');
-        menu.style.zIndex = '10000';
     }, 10);
 }
 
 function hideContextMenus() {
-    const allContextMenus = document.querySelectorAll('.context-menu');
-    allContextMenus.forEach(menu => {
+    document.querySelectorAll('.context-menu').forEach(menu => {
         menu.classList.remove('show');
         menu.style.display = 'none';
     });
-    
-    if (currentContextMenu) {
-        currentContextMenu.classList.remove('show');
-        currentContextMenu.style.display = 'none';
-    }
-    
     currentContextMenu = null;
 }
 
-function closeModal(modal) {
-    if (modal && modal.style) modal.style.display = 'none';
-    contextMenuChatIndex = null;
-}
-
-// ... (previous imports remain the same)
-
 export function addDownloadButton(content, container) {
-    if (!container || !content) {
-        console.warn('Invalid parameters for download button');
-        return;
-    }
-    
+    if (!container) return;
+
     // Remove existing button if present
     const existingBtn = container.querySelector('.download-pdf-btn');
-    if (existingBtn) {
-        existingBtn.remove();
-    }
-    
+    if (existingBtn) existingBtn.remove();
+
     const btn = document.createElement('button');
     btn.className = 'download-pdf-btn';
     btn.innerHTML = `
         <div class="spinner" style="display: none;"></div>
-        <span class="download-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <path d="M12 15V3M12 15L8 11M12 15L16 11M21 15V19C21 20.1046 20.1046 21 19 21H5C3.89543 21 3 20.1046 3 19V15"
-                      stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-        </span>
+        <svg class="download-icon" width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M12 15V3M12 15L8 11M12 15L16 11M21 15V19C21 20.1046 20.1046 21 19 21H5C3.89543 21 3 20.1046 3 19V15"
+                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
         <span class="btn-text">Download PDF</span>
     `;
-    
-    btn.addEventListener('click', async function() {
+
+    btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        
+        // Check if PDF is already generating
+        if (isPDFGenerating) {
+            showToast('PDF generation already in progress. Please wait.', 'error');
+            return;
+        }
+        
         const btnText = btn.querySelector('.btn-text');
         const spinner = btn.querySelector('.spinner');
         const downloadIcon = btn.querySelector('.download-icon');
         
         // Set loading state
+        isPDFGenerating = true;
         btn.classList.add('loading');
         btn.disabled = true;
         if (btnText) btnText.textContent = 'Generating...';
         if (spinner) spinner.style.display = 'block';
         if (downloadIcon) downloadIcon.style.display = 'none';
         
+        // Disable all other PDF buttons during generation
+        document.querySelectorAll('.download-pdf-btn').forEach(pdfBtn => {
+            if (pdfBtn !== btn) {
+                pdfBtn.disabled = true;
+                pdfBtn.style.opacity = '0.5';
+            }
+        });
+        
         try {
-            await generatePDF(container);
+            // Find the parent AI message content container
+            const aiMessageContent = container.closest('.ai-message-content');
+            if (aiMessageContent) {
+                await generatePDF(aiMessageContent);
+            } else {
+                showToast('Unable to find content to export', 'error');
+            }
         } catch (error) {
-            showToast('PDF Generation failed.', 'error');
             console.error('PDF generation failed:', error);
+            showToast('Failed to generate PDF', 'error');
         } finally {
-            // Reset button state
-            btn.classList.remove('loading');
-            btn.disabled = false;
-            if (btnText) btnText.textContent = 'Download PDF';
-            if (spinner) spinner.style.display = 'none';
-            if (downloadIcon) downloadIcon.style.display = 'inline';
+            // Reset all PDF buttons state
+            isPDFGenerating = false;
+            document.querySelectorAll('.download-pdf-btn').forEach(pdfBtn => {
+                pdfBtn.classList.remove('loading');
+                pdfBtn.disabled = false;
+                pdfBtn.style.opacity = '1';
+                
+                const pdfBtnText = pdfBtn.querySelector('.btn-text');
+                const pdfSpinner = pdfBtn.querySelector('.spinner');
+                const pdfDownloadIcon = pdfBtn.querySelector('.download-icon');
+                
+                if (pdfBtnText) pdfBtnText.textContent = 'Download PDF';
+                if (pdfSpinner) pdfSpinner.style.display = 'none';
+                if (pdfDownloadIcon) pdfDownloadIcon.style.display = 'inline';
+            });
         }
     });
     
-    // Add button to the most appropriate container
-    const contentContainer = container.querySelector('.ai-message-content') ||
-        container.querySelector('.ai-message') ||
-        container;
-    contentContainer.appendChild(btn);
+    container.appendChild(btn);
 }
 
-//
+window.updateScrollButtonVisibility = () => {
+    const chatContainer = document.querySelector('.chat-container');
+    const scrollButton = document.querySelector('.scroll-to-bottom-btn');
 
-function showToast(message, type = 'success') {
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.innerHTML = `
-        <span class="toast-icon">${type === 'success' ? '✓' : type === 'error' ? '⚠' : '⏳'}</span>
-        <span>${message}</span>
-    `;
-    
-    document.body.appendChild(toast);
-    
-    const duration = type === 'info' ? 2000 : 3000;
-    
-    setTimeout(() => {
-        toast.classList.add('fade-out');
-        setTimeout(() => {
-            if (toast.parentNode) toast.parentNode.removeChild(toast);
-        }, 300);
-    }, duration);
-}
+    if (!chatContainer || !scrollButton) return;
 
-window.updateScrollButtonVisibility = updateScrollButtonVisibility;
+    if (!chatContainer.children.length) {
+        scrollButton.classList.remove('visible');
+        return;
+    }
+    
+    const isAtBottom = chatContainer.scrollHeight - chatContainer.scrollTop <= chatContainer.clientHeight + 100;
+    scrollButton.classList.toggle('visible', !isAtBottom);
+};

@@ -1,124 +1,90 @@
-import { initUI } from './ui.js';
-import { handleSubmit, loadChatHistory, startNewChat } from './chat.js';
-import { loadChats, clearHistory } from './storage.js';
 
-// Ensure libraries are loaded before initializing
-async function ensureLibrariesLoaded() {
-    const checkLib = (name, globalVar) => {
-        if (!window[globalVar]) {
-            console.warn(`${name} not loaded yet`);
-            return false;
-        }
-        return true;
-    };
+import { initUI } from './ui.js';
+import { handleSubmit, loadChatHistory } from './chat.js';
+import { showToast } from './toast.js';
+
+async function initializeLibraries() {
+    // Ensure all required libraries are loaded
+    const requiredLibraries = [
+        { name: 'marked', global: 'marked', maxAttempts: 10 },
+        { name: 'DOMPurify', global: 'DOMPurify', maxAttempts: 10 },
+        { name: 'highlight.js', global: 'hljs', maxAttempts: 10 },
+        { name: 'html2pdf', global: 'html2pdf', maxAttempts: 20 }
+    ];
     
-    // Wait for all libraries to be available
-    let attempts = 0;
-    const maxAttempts = 50;
-    
-    while (attempts < maxAttempts) {
-        const allLoaded = [
-            checkLib('marked', 'marked'),
-            checkLib('DOMPurify', 'DOMPurify'),
-            checkLib('highlight.js', 'hljs'),
-            checkLib('html2pdf', 'html2pdf'),
-        ].every(Boolean);
-        
-        if (allLoaded) {
-            console.log('All libraries loaded successfully');
-            break;
+    for (const lib of requiredLibraries) {
+        let attempts = 0;
+        while (attempts < lib.maxAttempts && !window[lib.global]) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
         }
         
-        await new Promise(resolve => setTimeout(resolve, 100));
-        attempts++;
+        if (!window[lib.global]) {
+            console.error(`${lib.name} failed to load`);
+            showToast(`Failed to load ${lib.name}`, 'error');
+        }
     }
     
-    // Configure libraries
-    try {
-        if (window.marked) {
-            window.marked.setOptions({
-                breaks: true,
-                gfm: true,
-                sanitize: false
-            });
-            console.log('Marked.js configured');
-        }
-    } catch (error) {
-        console.error('Error configuring marked.js:', error);
+    // Configure marked.js if loaded
+    if (window.marked) {
+        window.marked.setOptions({
+            breaks: true,
+            gfm: true,
+            highlight: (code, lang) => {
+                if (window.hljs) {
+                    const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+                    return hljs.highlight(code, { language }).value;
+                }
+                return code;
+            }
+        });
     }
 }
 
-// Main initialization
+function setupEventListeners() {
+    // Form submission
+    const form = document.querySelector('.input-form');
+    if (form) form.addEventListener('submit', handleSubmit);
+    
+    // Input validation
+    const promptInput = document.querySelector('.prompt-input');
+    const generateBtn = document.querySelector('.generate-btn');
+    if (promptInput && generateBtn) {
+        promptInput.addEventListener('input', () => {
+            generateBtn.disabled = promptInput.value.trim() === '';
+        });
+    }
+}
+
 async function initialize() {
     try {
-        console.log('ScribeAI initializing...');
-        await ensureLibrariesLoaded();
+        await initializeLibraries();
         initUI();
+        setupEventListeners();
         
-        const form = document.querySelector('.input-form');
-        if (form) form.addEventListener('submit', handleSubmit);
-        
-        const newChatBtn = document.querySelector('.new-chat-btn');
-        if (newChatBtn) newChatBtn.addEventListener('click', startNewChat);
-        
-        const clearHistoryBtn = document.querySelector('.clear-history-btn');
-        if (clearHistoryBtn) {
-            clearHistoryBtn.addEventListener('click', () => {
-                clearHistory();
-                loadChatHistory([]);
-            });
-        }
-        
-        const promptInput = document.querySelector('.prompt-input');
-        const generateBtn = document.querySelector('.generate-btn');
-        if (promptInput && generateBtn) {
-            promptInput.addEventListener('input', () => {
-                generateBtn.disabled = promptInput.value.trim() === '';
-            });
-        }
-        
-        try {
-            const chats = loadChats();
-            loadChatHistory(chats);
-        } catch (error) {
-            loadChatHistory([]);
-        }
-        
+        // Load existing chats
+        const chats = JSON.parse(localStorage.getItem('scribeai-chats') || '[]');
+        loadChatHistory(chats);
     } catch (error) {
-        showErrorToUser('Failed to initialize application. Please refresh the page.');
+        console.error('Initialization failed:', error);
+        showToast('Failed to initialize application', 'error');
     }
 }
 
-function showErrorToUser(message) {
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-toast';
-    errorDiv.textContent = message;
-    document.body.appendChild(errorDiv);
-    
-    setTimeout(() => {
-        errorDiv.classList.add('fade-out');
-        setTimeout(() => {
-            if (errorDiv.parentNode) {
-                errorDiv.parentNode.removeChild(errorDiv);
-            }
-        }, 300);
-    }, 5000);
-}
-
-// Start initialization when DOM is ready
+// Start the app
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initialize);
 } else {
     initialize();
 }
 
-// Global error handler
+// Global error handling
 window.addEventListener('error', (event) => {
     console.error('Global error:', event.error);
+    showToast('An unexpected error occurred', 'error');
 });
 
 window.addEventListener('unhandledrejection', (event) => {
-    console.error('Unhandled promise rejection:', event.reason);
+    console.error('Unhandled rejection:', event.reason);
+    showToast('An unexpected error occurred', 'error');
 });
-
-console.log('Main module loaded');

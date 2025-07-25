@@ -1,39 +1,77 @@
+
 import { getAIResponse } from './api.js';
-import { saveChat, loadChats, getChatMessages } from './storage.js';
+import { saveChat, loadChats, getChatMessages, updateChatTitle, deleteChat } from './storage.js';
 import { addDownloadButton } from './ui.js';
+import { showToast } from './toast.js';
 
 let currentStream = null;
 let isGenerating = false;
 let currentChatId = generateChatId();
 let messageCounter = 0;
-let lastUserMessage = null;
+
+function getContextualHistory(currentPrompt, currentChatId, maxMessages = 3) {
+    try {
+        const allChats = JSON.parse(localStorage.getItem('scribeai-chats')) || [];
+        const otherChats = allChats.filter(chat => chat.id !== currentChatId);
+        
+        // Find relevant messages based on keyword matching
+        const relevantMessages = [];
+        const promptWords = currentPrompt.toLowerCase().split(/\s+/).filter(word => word.length > 3);
+        
+        for (const chat of otherChats) {
+            for (const message of chat.messages) {
+                const messageWords = (message.prompt + ' ' + message.response).toLowerCase();
+                const relevanceScore = promptWords.filter(word => messageWords.includes(word)).length;
+                
+                if (relevanceScore > 0) {
+                    relevantMessages.push({
+                        ...message,
+                        relevanceScore,
+                        chatId: chat.id
+                    });
+                }
+            }
+        }
+        
+        // Sort by relevance and recency, take top messages
+        return relevantMessages
+            .sort((a, b) => {
+                if (a.relevanceScore !== b.relevanceScore) {
+                    return b.relevanceScore - a.relevanceScore;
+                }
+                return new Date(b.ts) - new Date(a.ts);
+            })
+            .slice(0, maxMessages);
+            
+    } catch (error) {
+        console.error('Error getting contextual history:', error);
+        return [];
+    }
+}
 
 function generateChatId() {
     return Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9);
 }
 
 function initializeMarkdown() {
-    try {
-        if (window.marked) {
-            window.marked.setOptions({ 
-                breaks: true, 
-                gfm: true,
-                sanitize: false,
-                highlight: function(code, lang) {
-                    if (window.hljs) {
-                        return window.hljs.highlightAuto(code, [lang]).value;
-                    }
-                    return code;
+    if (window.marked) {
+        window.marked.setOptions({
+            breaks: true,
+            gfm: true,
+            highlight: (code, lang) => {
+                if (window.hljs) {
+                    const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+                    return hljs.highlight(code, { language }).value;
                 }
-            });
-        }
-    } catch (e) {
-        console.error('Markdown parser initialization error:', e);
+                return code;
+            }
+        });
     }
 }
 
 export async function handleSubmit(event) {
-    if (event) event.preventDefault();
+    event?.preventDefault();
+    
     if (isGenerating) {
         cancelGeneration();
         return;
@@ -48,7 +86,6 @@ export async function handleSubmit(event) {
     toggleGenerateButton(true);
     
     const userMessageId = `msg-${messageCounter++}`;
-    lastUserMessage = text;
     addUserMessage(text, userMessageId);
     
     await generateAIResponse(text, `msg-${messageCounter++}`);
@@ -56,9 +93,14 @@ export async function handleSubmit(event) {
 
 export async function generateAIResponse(prompt, aiMessageId) {
     const chatContainer = document.querySelector('.chat-container');
+    if (!chatContainer) return;
+
+    let aiContainer;
+    let fullResponse = '';
+
     try {
         isGenerating = true;
-        const aiContainer = createAIMessageContainer(aiMessageId);
+        aiContainer = createAIMessageContainer(aiMessageId);
         chatContainer.appendChild(aiContainer);
         chatContainer.scrollTop = chatContainer.scrollHeight;
         
@@ -67,82 +109,180 @@ export async function generateAIResponse(prompt, aiMessageId) {
         aiContainer.querySelector('.ai-message').appendChild(contentContainer);
         contentContainer.style.display = 'none';
         
-        let fullResponse = '';
+        // Get current chat messages
+        const currentMessages = getChatMessages(currentChatId);
+        
+        // Get contextual history from other chats for better responses
+        const contextualHistory = getContextualHistory(prompt, currentChatId, 3);
         
         const conversation = [
-            ...getChatMessages(currentChatId).flatMap(msg => [
+            // Add relevant context from previous chats
+            ...contextualHistory.flatMap(msg => [
                 { role: 'user', content: msg.prompt },
                 { role: 'assistant', content: msg.response }
             ]),
+            // Add current chat messages
+            ...currentMessages.flatMap(msg => [
+                { role: 'user', content: msg.prompt },
+                { role: 'assistant', content: msg.response }
+            ]),
+            // Add current prompt
             { role: 'user', content: prompt }
         ];
         
-        let lastRenderTime = Date.now();
-        currentStream = getAIResponse(conversation, (chunk) => {
-            fullResponse += chunk;
+        currentStream = await getAIResponse(conversation, (chunk) => {
+            fullResponse = chunk;
+            renderMarkdown(contentContainer, fullResponse);
             
-            const now = Date.now();
-            if (now - lastRenderTime > 300) {
-                contentContainer.innerHTML = '';
-                const parsedContent = parseMarkdown(fullResponse);
-                contentContainer.appendChild(parsedContent);
-                lastRenderTime = now;
-                
-                if (contentContainer.style.display === 'none') {
-                    const loadingIndicator = aiContainer.querySelector('.loading-indicator');
-                    if (loadingIndicator) {
-                        loadingIndicator.style.opacity = '0';
-                        setTimeout(() => {
-                            loadingIndicator.remove();
-                            contentContainer.style.display = 'block';
-                        }, 300);
-                    }
+            if (contentContainer.style.display === 'none') {
+                const loadingIndicator = aiContainer.querySelector('.loading-indicator');
+                if (loadingIndicator) {
+                    loadingIndicator.style.opacity = '0';
+                    setTimeout(() => {
+                        loadingIndicator.remove();
+                        contentContainer.style.display = 'block';
+                    }, 300);
                 }
-                
-                chatContainer.scrollTop = chatContainer.scrollHeight;
             }
+            
+            chatContainer.scrollTop = chatContainer.scrollHeight;
         });
+
+        // Final render with all content
+        renderMarkdown(contentContainer, fullResponse);
         
-        const response = await currentStream;
-        fullResponse = typeof response === 'object' ? response.text : response;
-        
-        contentContainer.innerHTML = '';
-        contentContainer.appendChild(parseMarkdown(fullResponse));
-        
+        // Add centered download button after response
         setTimeout(() => {
-            addDownloadButton(fullResponse, aiContainer);
-        }, 100);
-        
-        if (contentContainer.style.display === 'none') {
-            const loadingIndicator = aiContainer.querySelector('.loading-indicator');
-            if (loadingIndicator) {
-                loadingIndicator.style.opacity = '0';
-                setTimeout(() => {
-                    loadingIndicator.remove();
-                    contentContainer.style.display = 'block';
-                }, 300);
-            } else {
-                contentContainer.style.display = 'block';
+            if (fullResponse.trim() !== '') {
+                const buttonContainer = document.createElement('div');
+                buttonContainer.style.width = '100%';
+                buttonContainer.style.display = 'flex';
+                buttonContainer.style.justifyContent = 'center';
+                buttonContainer.style.marginTop = '1.5rem';
+                
+                addDownloadButton(fullResponse, buttonContainer);
+                contentContainer.appendChild(buttonContainer);
             }
-        }
-        
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-        updateScrollButtonVisibility();
+        }, 100);
         
         saveChat(prompt, fullResponse, currentChatId);
         loadChatHistory(loadChats());
         
     } catch (error) {
-        if (error.name !== 'AbortError' && error.message !== 'Generation cancelled') {
-            showToast('Failed to generate response. Please try again.', 'error');
+        console.error('Error generating response:', error);
+        
+        // Remove loading indicator on error
+        const loadingIndicator = aiContainer?.querySelector('.loading-indicator');
+        if (loadingIndicator) {
+            loadingIndicator.remove();
         }
-        const loadingIndicator = chatContainer.querySelector('.loading-indicator');
-        if (loadingIndicator) loadingIndicator.remove();
+        
+        // Remove the entire AI container if no content was generated
+        if (!fullResponse.trim() && aiContainer) {
+            aiContainer.remove();
+        }
+        
+        if (error.message !== 'Generation cancelled') {
+            showToast('Failed to generate response', 'error');
+        }
     } finally {
         isGenerating = false;
         currentStream = null;
         toggleGenerateButton(false);
     }
+}
+
+function renderMarkdown(container, content) {
+    initializeMarkdown();
+    container.innerHTML = '';
+    
+    try {
+        if (window.marked && window.DOMPurify) {
+            const rawHTML = window.marked.parse(content);
+            let sanitizedHTML = window.DOMPurify.sanitize(rawHTML, {
+                ADD_TAGS: ['footer', 'div'],
+                ADD_ATTR: ['class', 'style']
+            });
+            
+            // Enhanced footer preservation and formatting
+            sanitizedHTML = sanitizedHTML.replace(
+                /<footer[^>]*>\s*<div class="document-footer"[^>]*>/gi,
+                '<div class="document-footer">'
+            ).replace(/<\/div>\s*<\/footer>/gi, '</div>');
+            
+            // Ensure footer HTML is properly structured
+            sanitizedHTML = sanitizedHTML.replace(
+                /<div class="document-footer"[^>]*>(.*?)<\/div>/gi,
+                '<div class="document-footer" style="font-size: 0.85rem !important; color: #666666 !important; margin-top: 2rem !important; padding-top: 1rem !important; border-top: 1px solid #e1e1e1 !important; text-align: center !important; display: block !important; visibility: visible !important; opacity: 1 !important;">$1</div>'
+            );
+            
+            container.innerHTML = sanitizedHTML;
+            
+            // Ensure all text is black and headings are bold
+            container.querySelectorAll('*').forEach(el => {
+                el.style.color = '#000000';
+                if (el.tagName.match(/^H[1-6]$/)) {
+                    el.style.fontWeight = 'bold';
+                }
+            });
+            
+            // Enhanced footer visibility enforcement
+            container.querySelectorAll('.document-footer').forEach(footer => {
+                // Apply comprehensive styling to ensure visibility
+                footer.style.cssText = `
+                    font-size: 0.85rem !important;
+                    color: #666666 !important;
+                    margin-top: 2rem !important;
+                    padding-top: 1rem !important;
+                    border-top: 1px solid #e1e1e1 !important;
+                    text-align: center !important;
+                    display: block !important;
+                    visibility: visible !important;
+                    opacity: 1 !important;
+                    clear: both !important;
+                    width: 100% !important;
+                    box-sizing: border-box !important;
+                    position: relative !important;
+                    z-index: 1 !important;
+                `;
+                
+                footer.querySelectorAll('strong').forEach(strong => {
+                    strong.style.cssText = `
+                        font-weight: 600 !important;
+                        color: #333333 !important;
+                    `;
+                });
+            });
+            
+            if (window.hljs) {
+                container.querySelectorAll('pre code').forEach((block) => {
+                    hljs.highlightElement(block);
+                });
+            }
+        } else {
+            container.textContent = content;
+        }
+    } catch (e) {
+        console.error('Markdown parsing error:', e);
+        container.textContent = content;
+    }
+}
+
+export function addUserMessage(text, id) {
+    const chatContainer = document.querySelector('.chat-container');
+    if (!chatContainer) return;
+
+    chatContainer.style.display = 'block';
+    document.querySelector('.welcome-screen').style.display = 'none';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'message user-message';
+    bubble.textContent = text;
+    if (id) bubble.id = id;
+
+    chatContainer.appendChild(bubble);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+    updateScrollButtonVisibility();
 }
 
 function createAIMessageContainer(id) {
@@ -159,7 +299,6 @@ function createAIMessageContainer(id) {
         <div class="spinner"></div>
         <span>Generating...</span>
     `;
-    loadingIndicator.style.minHeight = '100px';
     
     messageDiv.appendChild(loadingIndicator);
     container.appendChild(messageDiv);
@@ -167,49 +306,70 @@ function createAIMessageContainer(id) {
     return container;
 }
 
-function parseMarkdown(text) {
-    initializeMarkdown();
-    const container = document.createElement('div');
+export function startNewChat() {
+    currentChatId = generateChatId();
+    messageCounter = 0;
 
-    try {
-        if (window.marked && window.DOMPurify) {
-            const rawHTML = window.marked.parse(text);
-            container.innerHTML = window.DOMPurify.sanitize(rawHTML);
-        } else {
-            container.innerHTML = text.replace(/\n/g, '<br>');
-        }
-    } catch (e) {
-        console.error('Markdown parsing error:', e);
-        container.textContent = text;
+    const chatContainer = document.querySelector('.chat-container');
+    if (chatContainer) {
+        chatContainer.innerHTML = '';
+        chatContainer.style.display = 'none';
     }
 
-    // Apply syntax highlighting if available
-    if (window.hljs) {
-        container.querySelectorAll('pre code').forEach((block) => {
-            window.hljs.highlightElement(block);
+    const welcomeScreen = document.querySelector('.welcome-screen');
+    if (welcomeScreen) welcomeScreen.style.display = 'flex';
+
+    document.querySelectorAll('.history-list li').forEach(li => li.classList.remove('active'));
+    document.querySelector('.scroll-to-bottom-btn')?.classList.remove('visible');
+}
+
+export function loadChatHistory(chats) {
+    const historyList = document.querySelector('.history-list');
+    if (!historyList) return;
+
+    historyList.innerHTML = chats.length ? '' : '<li class="empty">No chat history</li>';
+
+    chats.sort((a, b) => new Date(b.ts) - new Date(a.ts)).forEach((chat, index) => {
+        const li = document.createElement('li');
+        li.textContent = chat.title;
+        li.dataset.chatId = chat.id;
+        li.dataset.index = index;
+
+        if (chat.id === currentChatId) li.classList.add('active');
+
+        li.addEventListener('click', () => {
+            document.querySelectorAll('.history-list li').forEach(item => item.classList.remove('active'));
+            li.classList.add('active');
+
+            const sidebar = document.querySelector('.sidebar');
+            if (sidebar) sidebar.classList.remove('open');
+
+            const chatContainer = document.querySelector('.chat-container');
+            if (chatContainer) {
+                chatContainer.innerHTML = '';
+                chatContainer.style.display = 'block';
+            }
+
+            document.querySelector('.welcome-screen').style.display = 'none';
+
+            currentChatId = chat.id;
+            messageCounter = 0;
+
+            chat.messages.forEach(msg => {
+                const userMsgId = `msg-${messageCounter++}`;
+                addUserMessage(msg.prompt, userMsgId);
+                addAIMessage(msg.response, false, `msg-${messageCounter++}`);
+            });
         });
-    }
 
-    return container;
+        historyList.appendChild(li);
+    });
 }
 
-export function addUserMessage(text, id) {
+function addAIMessage(text, showLoader = false, id) {
     const chatContainer = document.querySelector('.chat-container');
-    chatContainer.style.display = 'block';
-    document.querySelector('.welcome-screen').style.display = 'none';
+    if (!chatContainer) return;
 
-    const bubble = document.createElement('div');
-    bubble.className = 'message user-message';
-    bubble.textContent = text;
-    if (id) bubble.id = id;
-
-    chatContainer.appendChild(bubble);
-    chatContainer.scrollTop = chatContainer.scrollHeight;
-    updateScrollButtonVisibility();
-}
-
-export function addAIMessage(text, showLoader = false, id) {
-    const chatContainer = document.querySelector('.chat-container');
     chatContainer.style.display = 'block';
     document.querySelector('.welcome-screen').style.display = 'none';
 
@@ -225,18 +385,26 @@ export function addAIMessage(text, showLoader = false, id) {
 
     if (showLoader) {
         content.innerHTML = `
-            <div class="loading-indicator" style="min-height:100px">
+            <div class="loading-indicator">
                 <div class="spinner"></div>
                 <span>Generating...</span>
             </div>
         `;
     } else if (text) {
-        const responseText = typeof text === 'object' ? text.text : text;
-        const processedContainer = parseMarkdown(responseText);
-        content.appendChild(processedContainer);
-
+        renderMarkdown(content, text);
+        
+        // Add centered download button for existing messages
         setTimeout(() => {
-            addDownloadButton(responseText, container);
+            if (text.trim() !== '') {
+                const buttonContainer = document.createElement('div');
+                buttonContainer.style.width = '100%';
+                buttonContainer.style.display = 'flex';
+                buttonContainer.style.justifyContent = 'center';
+                buttonContainer.style.marginTop = '1.5rem';
+                
+                addDownloadButton(text, buttonContainer);
+                content.appendChild(buttonContainer);
+            }
         }, 100);
     }
 
@@ -249,104 +417,8 @@ export function addAIMessage(text, showLoader = false, id) {
     return content;
 }
 
-export function startNewChat() {
-    currentChatId = generateChatId();
-    lastUserMessage = null;
-    messageCounter = 0;
-
-    document.querySelector('.chat-container').innerHTML = '';
-    document.querySelector('.chat-container').style.display = 'none';
-    document.querySelector('.welcome-screen').style.display = 'flex';
-
-    document.querySelectorAll('.history-list li').forEach(li => li.classList.remove('active'));
-    document.querySelector('.scroll-to-bottom-btn').classList.remove('visible');
-}
-
-export function loadChatHistory(chats) {
-    const historyList = document.querySelector('.history-list');
-    if (!historyList) return;
-
-    historyList.innerHTML = chats.length ? '' : '<li class="empty">No chat history</li>';
-
-    const sortedChats = [...chats].sort((a, b) => {
-        const aTime = parseInt(a.id.split('-')[0]);
-        const bTime = parseInt(b.id.split('-')[0]);
-        return bTime - aTime;
-    });
-
-    sortedChats.forEach((chat, index) => {
-        const li = document.createElement('li');
-        li.textContent = chat.title || chat.messages[0]?.prompt.substring(0, 50) || 'New Chat';
-        li.dataset.chatId = chat.id;
-        li.dataset.index = index;
-
-        if (chat.id === currentChatId) li.classList.add('active');
-
-        li.addEventListener('click', () => {
-            document.querySelectorAll('.history-list li').forEach(item => item.classList.remove('active'));
-            li.classList.add('active');
-
-            const sidebar = document.querySelector('.sidebar');
-            if (sidebar && sidebar.classList.contains('open')) {
-                sidebar.classList.remove('open');
-            }
-
-            const chatContainer = document.querySelector('.chat-container');
-            chatContainer.innerHTML = '';
-            chatContainer.style.display = 'block';
-            document.querySelector('.welcome-screen').style.display = 'none';
-
-            currentChatId = chat.id;
-            lastUserMessage = null;
-            messageCounter = 0;
-
-            chat.messages.forEach(msg => {
-                const userMsgId = `msg-${messageCounter++}`;
-                addUserMessage(msg.prompt, userMsgId);
-                const aiMsgId = `msg-${messageCounter++}`;
-                addAIMessage(msg.response, false, aiMsgId);
-            });
-        });
-
-        historyList.appendChild(li);
-    });
-}
-
-function updateScrollButtonVisibility() {
-    const chatContainer = document.querySelector('.chat-container');
-    const scrollButton = document.querySelector('.scroll-to-bottom-btn');
-
-    if (!chatContainer || !chatContainer.children.length) {
-        if (scrollButton) scrollButton.classList.remove('visible');
-        return;
-    }
-
-    const isAtBottom = chatContainer.scrollHeight - chatContainer.scrollTop <= chatContainer.clientHeight + 100;
-    if (scrollButton) scrollButton.classList.toggle('visible', !isAtBottom);
-}
-
-function toggleGenerateButton(isGenerating) {
-    const generateBtn = document.querySelector('.generate-btn');
-    const sendIcon = document.querySelector('.send-icon');
-    const stopIcon = document.querySelector('.stop-icon');
-
-    if (!generateBtn) return;
-
-    if (isGenerating) {
-        generateBtn.disabled = false;
-        if (sendIcon) sendIcon.style.display = 'none';
-        if (stopIcon) stopIcon.style.display = 'block';
-    } else {
-        const promptInput = document.querySelector('.prompt-input');
-        const hasText = promptInput && promptInput.value.trim() !== '';
-        generateBtn.disabled = !hasText;
-        if (sendIcon) sendIcon.style.display = 'block';
-        if (stopIcon) stopIcon.style.display = 'none';
-    }
-}
-
 export function cancelGeneration() {
-    if (currentStream && typeof currentStream.abort === 'function') {
+    if (currentStream?.abort) {
         currentStream.abort();
     }
 
@@ -354,72 +426,42 @@ export function cancelGeneration() {
     currentStream = null;
     toggleGenerateButton(false);
 
-    const loadingIndicators = document.querySelectorAll('.loading-indicator');
-    loadingIndicators.forEach(indicator => indicator.remove());
+    document.querySelectorAll('.loading-indicator').forEach(indicator => indicator.remove());
 }
 
-// Toast notifications 
+function toggleGenerateButton(isGenerating) {
+    const generateBtn = document.querySelector('.generate-btn');
+    const promptInput = document.querySelector('.prompt-input');
+    
+    if (!generateBtn || !promptInput) return;
 
-export function showToast(message, type = 'success') {
-    // Remove any existing toasts first
-    const existingToasts = document.querySelectorAll('.toast');
-    existingToasts.forEach(toast => toast.remove());
+    generateBtn.disabled = promptInput.value.trim() === '' || isGenerating;
     
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.innerHTML = `
-        <span class="toast-icon">${type === 'success' ? '✓' : type === 'error' ? '⚠' : '⏳'}</span>
-        <span class="toast-message">${message}</span>
-    `;
+    const sendIcon = generateBtn.querySelector('.send-icon');
+    const stopIcon = generateBtn.querySelector('.stop-icon');
     
-    // Style the toast
-    toast.style.position = 'fixed';
-    toast.style.top = '20px';
-    toast.style.left = '50%';
-    toast.style.transform = 'translateX(-50%)';
-    toast.style.padding = '12px 24px';
-    toast.style.borderRadius = '4px';
-    toast.style.boxShadow = '0 3px 10px rgba(0, 0, 0, 0.2)';
-    toast.style.zIndex = '10000';
-    toast.style.display = 'flex';
-    toast.style.alignItems = 'center';
-    toast.style.gap = '10px';
-    toast.style.animation = 'slide-in 0.3s ease-out';
-    
-    // Type-specific styles
-    if (type === 'error') {
-        toast.style.backgroundColor = '#f44336';
-        toast.style.color = 'white';
-    } else if (type === 'success') {
-        toast.style.backgroundColor = '#4caf50';
-        toast.style.color = 'white';
-    } else if (type === 'info') {
-        toast.style.backgroundColor = '#2196f3';
-        toast.style.color = 'white';
+    if (isGenerating) {
+        if (sendIcon) sendIcon.style.display = 'none';
+        if (stopIcon) stopIcon.style.display = 'block';
     } else {
-        toast.style.backgroundColor = '#333';
-        toast.style.color = 'white';
+        if (sendIcon) sendIcon.style.display = 'block';
+        if (stopIcon) stopIcon.style.display = 'none';
     }
-    
-    document.body.appendChild(toast);
-    
-    // Auto-remove after delay
-    const duration = type === 'info' ? 2000 : 3000;
-    
-    setTimeout(() => {
-        toast.style.animation = 'fade-out 0.3s ease-out';
-        setTimeout(() => {
-            if (toast.parentNode) {
-                toast.parentNode.removeChild(toast);
-            }
-        }, 300);
-    }, duration);
 }
 
-// Call updateScrollButtonVisibility
+function updateScrollButtonVisibility() {
+    const chatContainer = document.querySelector('.chat-container');
+    const scrollButton = document.querySelector('.scroll-to-bottom-btn');
+
+    if (!chatContainer || !scrollButton) return;
+
+    if (!chatContainer.children.length) {
+        scrollButton.classList.remove('visible');
+        return;
+    }
+
+    const isAtBottom = chatContainer.scrollHeight - chatContainer.scrollTop <= chatContainer.clientHeight + 100;
+    scrollButton.classList.toggle('visible', !isAtBottom);
+}
 
 window.updateScrollButtonVisibility = updateScrollButtonVisibility;
-
-document.addEventListener('DOMContentLoaded', () => {
-    initializeMarkdown();
-});
